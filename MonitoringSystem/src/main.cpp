@@ -39,10 +39,16 @@ unsigned long telegramDelayMs = 300000;
 const char *ntpServer = "pool.ntp.org";
 const long gmtOffsetSec = 7 * 3600; // WIB (UTC+7), ubah jika zona waktu berbeda
 const int daylightOffsetSec = 0;
+const unsigned long wifiConnectTimeoutMs = 10000;
+const unsigned long wifiRetryIntervalMs = 15000;
+const unsigned long ntpRetryIntervalMs = 60000;
+unsigned long lastWiFiRetry = 0;
+unsigned long lastNtpAttempt = 0;
+bool rtcNtpSynced = false;
 
 /* ================= Server ================= */
 unsigned long lastSendTime = 0;
-const unsigned long sendInterval = 300000;
+const unsigned long sendInterval = 300000; // 5 menit
 
 /* ================= Pin ================= */
 const int oneWireBus = 18; // Pin data sensor suhu
@@ -64,7 +70,7 @@ float phValue = 0.0;
 int turbidityNTU = 0;
 
 /* ================= Kalibrasi ================= */
-float referencePhs[4] = {7.0, 6.86, 4.01, 9.18};
+float referencePhs[4] = {8.5, 6.86, 4.01, 9.18};
 float referenceVoltages[4] = {2.5, 2.48, 3.0, 2.2};
 float clearWaterVoltage = 1.96;
 float dirtyWaterVoltage = 0.9;
@@ -112,7 +118,7 @@ void bacaSuhu()
     return;
   }
 
-  if (telegramEnabled && temperatureC > 40.0)
+  if (telegramEnabled && WiFi.status() == WL_CONNECTED && temperatureC > 40.0)
     bot.sendMessage(chatID, "Suhu terlalu tinggi!", "");
 }
 
@@ -221,6 +227,59 @@ bool syncRTCFromNTP(unsigned long timeoutMs = 15000)
   return true;
 }
 
+void connectWiFiWithTimeout()
+{
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - start < wifiConnectTimeoutMs))
+  {
+    delay(200);
+  }
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    client.setInsecure();
+    Serial.println("WiFi terhubung.");
+  }
+  else
+  {
+    Serial.println("WiFi tidak terhubung. Sistem tetap jalan (offline mode).");
+  }
+
+  lastWiFiRetry = millis();
+}
+
+void maintainWiFiConnection()
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    if (!rtcNtpSynced && (lastNtpAttempt == 0 || millis() - lastNtpAttempt >= ntpRetryIntervalMs))
+    {
+      lastNtpAttempt = millis();
+
+      if (syncRTCFromNTP(3000))
+      {
+        Serial.println("RTC sinkron dari NTP (WIB).");
+        rtcNtpSynced = true;
+      }
+      else
+      {
+        Serial.println("Gagal sinkron NTP, pakai waktu RTC saat ini.");
+      }
+    }
+    return;
+  }
+
+  if (millis() - lastWiFiRetry >= wifiRetryIntervalMs)
+  {
+    lastWiFiRetry = millis();
+    Serial.println("Mencoba reconnect WiFi...");
+    WiFi.reconnect();
+  }
+}
+
 /* ================= SERVER ================= */
 void kirimDataKeServer()
 {
@@ -231,14 +290,16 @@ void kirimDataKeServer()
   http.begin("http://192.168.1.74:5000/kirim-sensor");
   http.addHeader("Content-Type", "application/json");
 
-  DateTime now = rtc.now();
-
+  DateTime now = rtc.now();                          // Ambil waktu saat ini dari RTC
+  bool waterpumpOn = digitalRead(relayPump) == HIGH; // ceck status akuator
+  bool heaterOn = digitalRead(relayHeater1) == LOW;
   String json = "{";
   json += "\"temperature\":" + String(temperatureC, 2) + ",";
   json += "\"ph\":" + String(phValue, 2) + ",";
   json += "\"turbidity\":" + String(turbidityNTU) + ",";
+  json += "\"waterpump\":\"" + String(waterpumpOn ? "ON" : "OFF") + "\",";
+  json += "\"heater\":\"" + String(heaterOn ? "ON" : "OFF") + "\",";
   json += "\"timestamp\":\"" + now.timestamp(DateTime::TIMESTAMP_TIME) + "\"}";
-
   http.POST(json);
   http.end();
 }
@@ -273,15 +334,7 @@ void setup()
   lcd.backlight();
   lcd.clear();
 
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
-    delay(500);
-  client.setInsecure();
-
-  if (syncRTCFromNTP())
-    Serial.println("RTC sinkron dari NTP (WIB).");
-  else
-    Serial.println("Gagal sinkron NTP, pakai waktu RTC saat ini.");
+  connectWiFiWithTimeout();
 
   /* ==== FUZZY INIT ==== */
   fuzzySets = setupFuzzySystem(fuzzy);
@@ -291,6 +344,8 @@ void setup()
 /* ================= LOOP ================= */
 void loop()
 {
+  maintainWiFiConnection();
+
   bacaSuhu();
   bacaPH();
   bacaKekeruhan();
