@@ -23,8 +23,8 @@ RTC_DS3231 rtc;
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 /* ================= WiFi ================= */
-const char *ssid = "KontrakSyariah";
-const char *password = "pastikumlot";
+const char *ssid = "Gasspoll";
+const char *password = "nikisinten12";
 
 /* ================= Telegram ================= */
 const char *botToken = "xxxx";
@@ -52,7 +52,7 @@ const unsigned long sendInterval = 300000; // 5 menit
 
 /* ================= Pin ================= */
 const int oneWireBus = 18; // Pin data sensor suhu
-const int phPin = 35;
+const int phPin = 35;      // GPIO35 ADC1 aman untuk WiFi
 #define turbidityPin 34
 
 const int relayPump = 33;
@@ -70,8 +70,13 @@ float phValue = 0.0;
 int turbidityNTU = 0;
 
 /* ================= Kalibrasi ================= */
-float referencePhs[4] = {8.5, 6.86, 4.01, 9.18};
-float referenceVoltages[4] = {2.5, 2.48, 3.0, 2.2};
+const int phNumSamples = 50;
+int phBufferArr[phNumSamples];
+
+const int phNumPoints = 3;
+const float phReferenceADC[phNumPoints] = {1240, 1210, 1127};
+const float phReferencePhs[phNumPoints] = {4.01, 6.86, 9.18};
+
 float clearWaterVoltage = 1.96;
 float dirtyWaterVoltage = 0.9;
 const int numSamples = 10;
@@ -124,18 +129,59 @@ void bacaSuhu()
 
 void bacaPH()
 {
-  int phRaw = analogRead(phPin);
-  float voltage = phRaw * (3.3 / 4095.0);
-
-  for (int i = 0; i < 3; i++)
+  for (int i = 0; i < phNumSamples; i++)
   {
-    if (voltage >= referenceVoltages[i + 1] && voltage <= referenceVoltages[i])
+    phBufferArr[i] = analogRead(phPin);
+    delay(10);
+  }
+
+  for (int i = 0; i < phNumSamples - 1; i++)
+  {
+    for (int j = i + 1; j < phNumSamples; j++)
     {
-      float slope = (referencePhs[i] - referencePhs[i + 1]) /
-                    (referenceVoltages[i] - referenceVoltages[i + 1]);
-      float intercept = referencePhs[i] - slope * referenceVoltages[i];
-      phValue = slope * voltage + intercept;
-      break;
+      if (phBufferArr[i] > phBufferArr[j])
+      {
+        int temp = phBufferArr[i];
+        phBufferArr[i] = phBufferArr[j];
+        phBufferArr[j] = temp;
+      }
+    }
+  }
+
+  long sum = 0;
+  for (int i = 10; i < 20; i++)
+  {
+    sum += phBufferArr[i];
+  }
+
+  float adc = sum / 10.0;
+
+  if (adc <= 0)
+  {
+    phValue = 0;
+    return;
+  }
+
+  if (adc >= phReferenceADC[0])
+  {
+    phValue = phReferencePhs[0];
+  }
+  else if (adc <= phReferenceADC[phNumPoints - 1])
+  {
+    phValue = phReferencePhs[phNumPoints - 1];
+  }
+  else
+  {
+    for (int i = 0; i < phNumPoints - 1; i++)
+    {
+      if (adc <= phReferenceADC[i] && adc >= phReferenceADC[i + 1])
+      {
+        phValue = phReferencePhs[i] +
+                  (phReferencePhs[i + 1] - phReferencePhs[i]) *
+                      ((adc - phReferenceADC[i]) /
+                       (phReferenceADC[i + 1] - phReferenceADC[i]));
+        break;
+      }
     }
   }
 }
@@ -287,7 +333,7 @@ void kirimDataKeServer()
     return;
 
   HTTPClient http;
-  http.begin("http://192.168.1.74:5000/kirim-sensor");
+  http.begin("http://192.168.1.5:5000/kirim-sensor");
   http.addHeader("Content-Type", "application/json");
 
   DateTime now = rtc.now();                          // Ambil waktu saat ini dari RTC
@@ -309,6 +355,8 @@ void setup()
 {
   Serial.begin(115200);
   Wire.begin(21, 22); // SDA, SCL
+  analogReadResolution(12);
+  analogSetPinAttenuation(phPin, ADC_11db);
 
   if (!rtc.begin())
   {
