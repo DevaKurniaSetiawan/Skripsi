@@ -38,9 +38,11 @@ inline FuzzySets setupFuzzySystem(Fuzzy *fuzzy)
 
     // Turbidity (0-100)
     FuzzyInput *turbidity = new FuzzyInput(2);
-    sets.KC = new FuzzySet(0, 10, 20, 25);
+    // Left shoulder: nilai sangat rendah tetap dianggap "jernih"
+    sets.KC = new FuzzySet(0, 0, 20, 25);
     sets.KM = new FuzzySet(25, 35, 40, 50);
-    sets.KT = new FuzzySet(50, 60, 80, 100);
+    // Right shoulder: nilai sangat tinggi (termasuk 100) tetap dianggap "keruh tinggi"
+    sets.KT = new FuzzySet(50, 60, 100, 100);
     turbidity->addFuzzySet(sets.KC);
     turbidity->addFuzzySet(sets.KM);
     turbidity->addFuzzySet(sets.KT);
