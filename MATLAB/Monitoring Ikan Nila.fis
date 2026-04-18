@@ -15,7 +15,7 @@ DefuzzMethod='centroid'
 Name='Temperature'
 Range=[0 35]
 NumMFs=3
-MF1='TC':'trapmf',[0 20 23 25]
+MF1='TC':'trapmf',[0 0 23.5 25.5]
 MF2='TN':'trimf',[25 27 30]
 MF3='TH':'trapmf',[30 32 35 35]
 
